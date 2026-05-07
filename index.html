@@ -527,12 +527,13 @@
     </div>
     <div class="form-group">
       <label class="form-label">카드 종류</label>
-      <div class="toggle-row">
+      <div class="toggle-row" style="flex-wrap:wrap;gap:6px">
         <button class="toggle-btn" id="eDebit"  onclick="setCardType('debit')">💙 체크카드</button>
         <button class="toggle-btn" id="eCredit" onclick="setCardType('credit')">💛 신용카드</button>
+        <button class="toggle-btn" id="eExtra"  onclick="setCardType('extra')">🟣 별도 관리</button>
       </div>
     </div>
-    <div class="form-group">
+    <div class="form-group" id="eBudgetGroup">
       <label class="form-label">월 예산 (원)</label>
       <input type="text" id="eBudget" class="form-control" inputmode="numeric" oninput="onAmountInput(this)">
     </div>
@@ -786,6 +787,33 @@ function instMonthly(cardId, y, m) {
 }
 function totalSpent(cardId, y, m) { return regularSpent(cardId, y, m) + instMonthly(cardId, y, m); }
 
+// 카드의 총 남은 할부 잔액 (전체 기간)
+function remainingInstBalance(cardId) {
+  const now = new Date();
+  const ny = now.getFullYear(), nm = now.getMonth() + 1;
+  const cur = ny * 12 + nm;
+  return load().installments.filter(i => i.cardId === cardId).reduce((s, i) => {
+    const [sy, sm] = i.startMonth.split('-').map(Number);
+    const start = sy * 12 + sm;
+    const remaining = Math.max(0, (start + i.months) - cur);
+    return s + remaining * i.monthlyAmount;
+  }, 0);
+}
+// 완납 예정 월 문자열
+function payoffMonth(cardId) {
+  const insts = load().installments.filter(i => i.cardId === cardId);
+  if (!insts.length) return null;
+  let maxEnd = 0;
+  insts.forEach(i => {
+    const [sy, sm] = i.startMonth.split('-').map(Number);
+    const end = sy * 12 + sm + i.months - 1;
+    if (end > maxEnd) maxEnd = end;
+  });
+  const y = Math.floor((maxEnd - 1) / 12);
+  const m = ((maxEnd - 1) % 12) + 1;
+  return `${y}년 ${m}월`;
+}
+
 // 모든 월 데이터에서 ID로 항목 검색 (지출/수입 모두)
 function findEntryById(id) {
   const d = load();
@@ -804,14 +832,21 @@ function findEntryById(id) {
 // ══════════════════════════════════════════════════════════
 function renderHome() {
   const d = load();
+  const mainCards  = d.cards.filter(c => c.type !== 'extra');
+  const extraCards = d.cards.filter(c => c.type === 'extra');
+
   let totBudget = 0, totSpent = 0, totIncome = 0;
-  d.cards.forEach(c => { totBudget += c.budget; totSpent += totalSpent(c.id, CY, CM); totIncome += totalIncome(c.id, CY, CM); });
+  mainCards.forEach(c => {
+    totBudget += c.budget;
+    totSpent  += totalSpent(c.id, CY, CM);
+    totIncome += totalIncome(c.id, CY, CM);
+  });
   const totNet = totBudget - totSpent + totIncome;
   const totPct = totBudget ? Math.round(totSpent / totBudget * 100) : 0;
 
   let html = `
     <div class="summary-card">
-      <div class="summary-label">이번 달 총 예산</div>
+      <div class="summary-label">이번 달 생활비 예산</div>
       <div class="summary-amount">${won(totBudget)}</div>
       <div class="summary-row">
         <div class="summary-mini"><div class="mini-label">지출</div><div class="mini-val">${won(totSpent)}</div></div>
@@ -819,36 +854,67 @@ function renderHome() {
         <div class="summary-mini"><div class="mini-label">잔여</div><div class="mini-val">${won(Math.max(0,totNet))}</div></div>
         <div class="summary-mini"><div class="mini-label">사용률</div><div class="mini-val">${totPct}%</div></div>
       </div>
-    </div>
-    <div class="section-title">카드별 현황</div>`;
+    </div>`;
 
-  d.cards.forEach(card => {
-    const spent   = totalSpent(card.id, CY, CM);
-    const income  = totalIncome(card.id, CY, CM);
-    const net     = card.budget - spent + income;
-    const pct     = card.budget ? Math.min(100, Math.round(spent / card.budget * 100)) : 0;
-    const cls     = pct >= 90 ? 'over' : pct >= 70 ? 'warn' : '';
-    const instAmt = instMonthly(card.id, CY, CM);
-    const regAmt  = regularSpent(card.id, CY, CM);
-    html += `
-      <div class="card">
-        <div class="card-header">
-          <span class="card-name">${card.name}</span>
-          <span class="badge ${card.type==='debit'?'badge-debit':'badge-credit'}">${card.type==='debit'?'체크':'신용'}</span>
-        </div>
-        <div style="font-size:0.72rem;color:var(--text-muted);margin-bottom:7px">예산 ${won(card.budget)}</div>
-        <div class="amounts-row">
-          <div><div class="amt-sub">지출</div><div class="amt-val">${won(spent)}</div></div>
-          <div style="text-align:right"><div class="amt-sub">잔여</div>
-            <div class="amt-val ${net<0?'red':'green'}">${net<0?'초과 '+won(-net):won(net)}</div>
+  if (mainCards.length) {
+    html += `<div class="section-title">생활비 카드</div>`;
+    mainCards.forEach(card => {
+      const spent   = totalSpent(card.id, CY, CM);
+      const income  = totalIncome(card.id, CY, CM);
+      const net     = card.budget - spent + income;
+      const pct     = card.budget ? Math.min(100, Math.round(spent / card.budget * 100)) : 0;
+      const cls     = pct >= 90 ? 'over' : pct >= 70 ? 'warn' : '';
+      const instAmt = instMonthly(card.id, CY, CM);
+      const regAmt  = regularSpent(card.id, CY, CM);
+      html += `
+        <div class="card">
+          <div class="card-header">
+            <span class="card-name">${card.name}</span>
+            <span class="badge ${card.type==='debit'?'badge-debit':'badge-credit'}">${card.type==='debit'?'체크':'신용'}</span>
           </div>
-        </div>
-        ${income>0?`<div style="font-size:0.75rem;color:#10B981;font-weight:700;margin:4px 0 6px">💰 페이백/수입 +${won(income)}</div>`:''}
-        <div class="prog-bar"><div class="prog-fill ${cls}" style="width:${pct}%"></div></div>
-        <div class="prog-pct">${pct}% 사용</div>
-        ${card.type==='credit'&&instAmt>0?`<div class="inst-note">💳 할부 합계 <b>${won(instAmt)}</b> · 일반결제 <b>${won(regAmt)}</b></div>`:''}
-      </div>`;
-  });
+          <div style="font-size:0.72rem;color:var(--text-muted);margin-bottom:7px">예산 ${won(card.budget)}</div>
+          <div class="amounts-row">
+            <div><div class="amt-sub">지출</div><div class="amt-val">${won(spent)}</div></div>
+            <div style="text-align:right"><div class="amt-sub">잔여</div>
+              <div class="amt-val ${net<0?'red':'green'}">${net<0?'초과 '+won(-net):won(net)}</div>
+            </div>
+          </div>
+          ${income>0?`<div style="font-size:0.75rem;color:#10B981;font-weight:700;margin:4px 0 6px">💰 페이백/수입 +${won(income)}</div>`:''}
+          <div class="prog-bar"><div class="prog-fill ${cls}" style="width:${pct}%"></div></div>
+          <div class="prog-pct">${pct}% 사용</div>
+          ${card.type==='credit'&&instAmt>0?`<div class="inst-note">💳 할부 합계 <b>${won(instAmt)}</b> · 일반결제 <b>${won(regAmt)}</b></div>`:''}
+        </div>`;
+    });
+  }
+
+  if (extraCards.length) {
+    html += `<div class="section-title" style="margin-top:18px">🟣 별도 관리 카드</div>`;
+    extraCards.forEach(card => {
+      const spent      = totalSpent(card.id, CY, CM);
+      const income     = totalIncome(card.id, CY, CM);
+      const instAmt    = instMonthly(card.id, CY, CM);
+      const regAmt     = regularSpent(card.id, CY, CM);
+      const remaining  = remainingInstBalance(card.id);
+      const payoff     = payoffMonth(card.id);
+      html += `
+        <div class="card" style="border-left:4px solid #8B5CF6">
+          <div class="card-header">
+            <span class="card-name">${card.name}</span>
+            <span class="badge" style="background:#EDE9FE;color:#6D28D9">별도</span>
+          </div>
+          <div class="amounts-row" style="margin-bottom:10px">
+            <div><div class="amt-sub">이번 달 사용</div><div class="amt-val">${won(spent)}</div></div>
+            <div style="text-align:right"><div class="amt-sub">총 남은 할부금</div>
+              <div class="amt-val" style="color:#7C3AED">${remaining>0?won(remaining):'없음'}</div>
+            </div>
+          </div>
+          ${instAmt>0?`<div style="font-size:0.75rem;color:var(--text-muted);margin-bottom:6px">이번 달: 할부 ${won(instAmt)} · 일시불 ${won(regAmt)}</div>`:''}
+          ${income>0?`<div style="font-size:0.75rem;color:#10B981;font-weight:700;margin-bottom:6px">💰 수입/페이백 +${won(income)}</div>`:''}
+          ${payoff?`<div style="font-size:0.72rem;color:var(--text-muted)">📅 완납 예정 ${payoff}</div>`:''}
+        </div>`;
+    });
+  }
+
   document.getElementById('page-home').innerHTML = html;
 }
 
@@ -883,7 +949,7 @@ function selectPreset(name) { document.getElementById('fDesc').value = name; }
 function onCardChange() {
   const d = load();
   const card = d.cards.find(c => c.id === document.getElementById('fCard').value);
-  const show = card && card.type === 'credit';
+  const show = card && (card.type === 'credit' || card.type === 'extra') && ENTRY_TYPE === 'expense';
   document.getElementById('fInstallSection').style.display = show ? '' : 'none';
   if (!show) setPayType('normal');
 }
@@ -1329,8 +1395,8 @@ function renderSettings() {
           <h3>${c.name}</h3>
           <button class="edit-btn" onclick="openEditModal(${i})">편집</button>
         </div>
-        <div class="setting-row"><span class="setting-lbl">종류</span><span class="setting-val">${c.type==='debit'?'💙 체크카드':'💛 신용카드'}</span></div>
-        <div class="setting-row"><span class="setting-lbl">월 예산</span><span class="setting-val">${won(c.budget)}</span></div>
+        <div class="setting-row"><span class="setting-lbl">종류</span><span class="setting-val">${c.type==='debit'?'💙 체크카드':c.type==='extra'?'🟣 별도 관리':'💛 신용카드'}</span></div>
+        ${c.type!=='extra'?`<div class="setting-row"><span class="setting-lbl">월 예산</span><span class="setting-val">${won(c.budget)}</span></div>`:''}
       </div>`).join('') +
     `<button class="btn btn-primary" style="margin-top:4px" onclick="openEditModal(-1)">+ 카드 추가</button>`;
 
@@ -1504,6 +1570,9 @@ function setCardType(t) {
   EDIT_CARD_TYPE = t;
   document.getElementById('eDebit').classList.toggle('on',  t==='debit');
   document.getElementById('eCredit').classList.toggle('on', t==='credit');
+  document.getElementById('eExtra').classList.toggle('on',  t==='extra');
+  document.getElementById('eBudgetGroup').style.display = t==='extra' ? 'none' : '';
+  if (t==='extra') document.getElementById('eBudget').value = '0';
 }
 function saveCard() {
   const idx    = parseInt(document.getElementById('eIdx').value);
