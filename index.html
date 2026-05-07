@@ -111,8 +111,8 @@
     .form-control::placeholder { color: var(--text-muted); }
 
     /* ── QUICK AMOUNTS ─── */
-    .quick-amounts { display: flex; gap: 6px; margin-top: 7px; flex-wrap: wrap; }
-    .qa-btn { flex: 1; min-width: 56px; padding: 9px 6px; background: var(--blue-50); border: 1.5px solid var(--blue-200); border-radius: 10px; font-size: 0.82rem; font-weight: 800; color: var(--blue-600); cursor: pointer; transition: all 0.15s; text-align: center; }
+    .quick-amounts { display: flex; gap: 5px; margin-top: 7px; flex-wrap: wrap; }
+    .qa-btn { flex: 1; min-width: 44px; padding: 7px 3px; background: var(--blue-50); border: 1.5px solid var(--blue-200); border-radius: 9px; font-size: 0.74rem; font-weight: 800; color: var(--blue-600); cursor: pointer; transition: all 0.15s; text-align: center; }
     .qa-btn:active { background: var(--blue-100); transform: scale(0.95); }
     .qa-clear { background: #FFF7ED; border-color: #FED7AA; color: #C2410C; }
 
@@ -150,8 +150,12 @@
     .exp-meta  { font-size: 0.72rem; color: var(--text-muted); margin-top: 2px; }
     .exp-right { text-align: right; flex-shrink: 0; margin-left: 8px; }
     .exp-amount { font-weight: 800; font-size: 0.92rem; color: var(--text-dark); }
-    .del-btn { background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 1.15rem; margin-left: 6px; line-height: 1; flex-shrink: 0; }
+    .del-btn { background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 1.15rem; margin-left: 4px; line-height: 1; flex-shrink: 0; }
     .del-btn:hover { color: var(--red); }
+    .edit-exp-btn { background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 0.95rem; margin-left: 4px; line-height: 1; flex-shrink: 0; }
+    .edit-exp-btn:hover { color: var(--blue-500); }
+    .toast { position: fixed; bottom: 90px; left: 50%; transform: translateX(-50%) translateY(20px); background: #1E3A5F; color: #fff; padding: 10px 22px; border-radius: 22px; font-size: 0.84rem; font-weight: 700; opacity: 0; transition: all 0.28s; z-index: 999; pointer-events: none; white-space: nowrap; }
+    .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
 
     /* ── CALENDAR ─── */
     .cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 3px; }
@@ -316,6 +320,8 @@
         <button class="qa-btn" onclick="addAmount(10000)">+1만</button>
         <button class="qa-btn" onclick="addAmount(5000)">+5천</button>
         <button class="qa-btn" onclick="addAmount(1000)">+1천</button>
+        <button class="qa-btn" onclick="addAmount(500)">+500</button>
+        <button class="qa-btn" onclick="addAmount(100)">+100</button>
         <button class="qa-btn qa-clear" onclick="clearAmount()">C</button>
       </div>
     </div>
@@ -460,6 +466,48 @@
 </div>
 
 <!-- CARD EDIT MODAL -->
+<div class="toast" id="toast"></div>
+
+<!-- 지출 수정 모달 -->
+<div class="overlay" id="expEditModal">
+  <div class="sheet">
+    <div class="sheet-handle"></div>
+    <button class="sheet-close" onclick="closeExpModal()">✕</button>
+    <div class="sheet-title">지출 수정</div>
+    <input type="hidden" id="eeId">
+    <div class="form-group">
+      <label class="form-label">날짜</label>
+      <input type="date" id="eeDate" class="form-control">
+    </div>
+    <div class="form-group">
+      <label class="form-label">카드</label>
+      <select id="eeCard" class="form-control"></select>
+    </div>
+    <div class="form-group">
+      <label class="form-label">금액 (원)</label>
+      <input type="text" id="eeAmount" class="form-control" inputmode="numeric"
+             oninput="onAmountInput(this)" style="font-size:1.1rem;font-weight:800">
+      <div class="quick-amounts" style="margin-top:7px">
+        <button class="qa-btn" onclick="addAmountTo('eeAmount',50000)">+5만</button>
+        <button class="qa-btn" onclick="addAmountTo('eeAmount',10000)">+1만</button>
+        <button class="qa-btn" onclick="addAmountTo('eeAmount',5000)">+5천</button>
+        <button class="qa-btn" onclick="addAmountTo('eeAmount',1000)">+1천</button>
+        <button class="qa-btn" onclick="addAmountTo('eeAmount',500)">+500</button>
+        <button class="qa-btn" onclick="addAmountTo('eeAmount',100)">+100</button>
+        <button class="qa-btn qa-clear" onclick="document.getElementById('eeAmount').value=''">C</button>
+      </div>
+    </div>
+    <div class="form-group">
+      <label class="form-label">항목명</label>
+      <input type="text" id="eeDesc" class="form-control" placeholder="예: 마트, 식비…">
+    </div>
+    <div style="display:flex;gap:8px;margin-top:4px">
+      <button class="btn btn-red" style="flex:1" onclick="deleteExpFromModal()">삭제</button>
+      <button class="btn btn-primary" style="flex:2" onclick="saveExpenseEdit()">저장</button>
+    </div>
+  </div>
+</div>
+
 <div class="overlay" id="editModal">
   <div class="sheet">
     <div class="sheet-handle"></div>
@@ -784,13 +832,15 @@ function submitExpense() {
     const monthly = Math.ceil(amount / months);
     d.installments.push({ id:uid(), cardId, description:desc, totalAmount:amount, months, monthlyAmount:monthly, startMonth:date.slice(0,7) });
     scheduleSave(d);
-    alert(`✅ 할부 등록!\n월 ${won(monthly)} × ${months}개월`);
+    showToast(`✅ 할부 등록! 월 ${won(monthly)} × ${months}개월`);
   } else {
     d.expenses.push({ id:uid(), date, cardId, amount, description:desc });
     scheduleSave(d);
-    alert('✅ 지출이 추가됐어요!');
+    showToast('✅ 추가됐어요!');
   }
-  go('home');
+  document.getElementById('fAmount').value = '';
+  document.getElementById('fDesc').value   = '';
+  document.getElementById('fAmount').focus();
 }
 
 // ══════════════════════════════════════════════════════════
@@ -821,6 +871,7 @@ function renderHistoryList() {
       <div class="exp-icon">${icon}</div>
       <div class="exp-info"><div class="exp-desc">${e.description}</div><div class="exp-meta">${e.date} · ${card?card.name:'–'}</div></div>
       <div class="exp-right"><div class="exp-amount">${won(e.amount)}</div></div>
+      <button class="edit-exp-btn" onclick="openExpModal('${e.id}')">✏️</button>
       <button class="del-btn" onclick="delExpense('${e.id}')">×</button>
     </div>`;
   }).join('');
@@ -902,6 +953,7 @@ function showDayDetail(day, rerender=true) {
         <div class="exp-icon">${icon}</div>
         <div class="exp-info"><div class="exp-desc">${e.description}</div><div class="exp-meta">${card?card.name:'–'}</div></div>
         <div class="exp-right"><div class="exp-amount">${won(e.amount)}</div></div>
+        <button class="edit-exp-btn" onclick="openExpModal('${e.id}')">✏️</button>
         <button class="del-btn" onclick="delExpenseFromCal('${e.id}')">×</button>
       </div>`;
     }).join('')}`;
@@ -909,6 +961,59 @@ function showDayDetail(day, rerender=true) {
 function delExpenseFromCal(id) {
   if (!confirm('이 지출을 삭제할까요?')) return;
   const d=load(); d.expenses=d.expenses.filter(e=>e.id!==id); scheduleSave(d); renderCalendar();
+}
+
+// ── Toast
+let _toastTimer;
+function showToast(msg) {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.classList.add('show');
+  clearTimeout(_toastTimer);
+  _toastTimer = setTimeout(() => el.classList.remove('show'), 2200);
+}
+
+// ── 지출 수정 모달
+function openExpModal(id) {
+  const d = load();
+  const e = d.expenses.find(x => x.id === id);
+  if (!e) return;
+  document.getElementById('eeId').value    = id;
+  document.getElementById('eeDate').value  = e.date;
+  document.getElementById('eeDesc').value  = e.description;
+  document.getElementById('eeAmount').value = e.amount.toLocaleString();
+  document.getElementById('eeCard').innerHTML =
+    d.cards.map(c => `<option value="${c.id}" ${c.id===e.cardId?'selected':''}>${c.name}</option>`).join('');
+  document.getElementById('expEditModal').classList.add('open');
+}
+function closeExpModal() {
+  document.getElementById('expEditModal').classList.remove('open');
+}
+function saveExpenseEdit() {
+  const id     = document.getElementById('eeId').value;
+  const date   = document.getElementById('eeDate').value;
+  const cardId = document.getElementById('eeCard').value;
+  const amount = getAmount('eeAmount');
+  const desc   = document.getElementById('eeDesc').value.trim();
+  if (!date || !cardId || amount <= 0 || !desc) { alert('모든 항목을 입력해주세요.'); return; }
+  const d = load();
+  const idx = d.expenses.findIndex(x => x.id === id);
+  if (idx === -1) return;
+  d.expenses[idx] = { ...d.expenses[idx], date, cardId, amount, description: desc };
+  scheduleSave(d);
+  closeExpModal();
+  showToast('✅ 수정됐어요!');
+  if (PAGE === 'history') renderHistory();
+}
+function deleteExpFromModal() {
+  const id = document.getElementById('eeId').value;
+  if (!confirm('이 지출을 삭제할까요?')) return;
+  const d = load();
+  d.expenses = d.expenses.filter(e => e.id !== id);
+  scheduleSave(d);
+  closeExpModal();
+  showToast('🗑️ 삭제됐어요');
+  if (PAGE === 'history') renderHistory();
 }
 
 // ══════════════════════════════════════════════════════════
