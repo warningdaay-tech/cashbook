@@ -491,6 +491,9 @@
 // ══════════════════════════════════════════════════════════
 const KEY     = 'cashbook_v4';
 const GAS_KEY = 'cashbook_gas_url';
+const GAS_SEC = 'cashbook_gas_secret';
+
+function getSecretKey() { return localStorage.getItem(GAS_SEC) || ''; }
 
 function load() {
   try { return ensureFields(JSON.parse(localStorage.getItem(KEY))) || defaults(); }
@@ -546,12 +549,19 @@ function setSyncState(s) {
 
 async function syncLoad(showOverlay = false) {
   const url = getGasUrl();
-  if (!url) { setSyncState('idle'); return; }
+  const key = getSecretKey();
+  if (!url || !key) { setSyncState('idle'); return; }
   if (showOverlay) showLoading('Google Sheets에서 불러오는 중…');
   setSyncState('loading');
   try {
-    const res  = await fetch(url, { cache: 'no-store' });
+    const res  = await fetch(`${url}?key=${encodeURIComponent(key)}`, { cache: 'no-store' });
     const text = await res.text();
+    if (text.includes('"error":"unauthorized"')) {
+      setSyncState('error');
+      hideLoading();
+      alert('❌ 비밀 키가 틀렸어요.\n설정에서 Apps Script의 SECRET_KEY와 동일한 키를 입력했는지 확인해주세요.');
+      return;
+    }
     const remote = text && text !== '{}' ? JSON.parse(text) : null;
     if (remote && remote.cards && remote.cards.length > 0) {
       saveLocal(remote);
@@ -572,15 +582,16 @@ async function syncLoad(showOverlay = false) {
 
 async function syncSaveNow() {
   const url = getGasUrl();
-  if (!url) return;
+  const key = getSecretKey();
+  if (!url || !key) return;
   setSyncState('syncing');
   try {
-    await fetch(url, {
-      method: 'POST',
-      mode: 'no-cors',
-      headers: { 'Content-Type': 'text/plain' },
-      body: JSON.stringify(load())
-    });
+    const data    = JSON.stringify(load());
+    const saveUrl = `${url}?key=${encodeURIComponent(key)}&action=write&data=${encodeURIComponent(data)}`;
+    const res  = await fetch(saveUrl, { cache: 'no-store' });
+    const text = await res.text();
+    const json = JSON.parse(text);
+    if (json.error) throw new Error(json.error);
     setSyncState('synced');
   } catch(e) {
     console.warn('syncSave error:', e);
@@ -967,26 +978,33 @@ function delInst(id) {
 //  SETTINGS
 // ══════════════════════════════════════════════════════════
 const GAS_SCRIPT_CODE = `var SHEET_NAME = 'cashbook';
+var SECRET_KEY = 'YOUR_SECRET_KEY'; // ← 본인만 아는 비밀번호로 변경!
 
-function doGet() {
-  var ss = SpreadsheetApp.getActiveSpreadsheet();
-  var sheet = ss.getSheetByName(SHEET_NAME)
-             || ss.insertSheet(SHEET_NAME);
+function ok(msg)  { return ContentService.createTextOutput(JSON.stringify({ ok: true, msg: msg || '' })).setMimeType(ContentService.MimeType.JSON); }
+function fail(msg){ return ContentService.createTextOutput(JSON.stringify({ error: msg || 'error' })).setMimeType(ContentService.MimeType.JSON); }
+
+function doGet(e) {
+  if (!e || !e.parameter) return fail('no params');
+  if (e.parameter.key !== SECRET_KEY) return fail('unauthorized');
+
+  var action = e.parameter.action || 'read';
+  var ss    = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = ss.getSheetByName(SHEET_NAME) || ss.insertSheet(SHEET_NAME);
+
+  if (action === 'write') {
+    var raw = e.parameter.data;
+    if (!raw) return fail('no data');
+    sheet.getRange('A1').setValue(raw);
+    return ok('saved');
+  }
+
   var val = sheet.getRange('A1').getValue();
   return ContentService
     .createTextOutput(val || '{}')
     .setMimeType(ContentService.MimeType.JSON);
 }
 
-function doPost(e) {
-  var ss = SpreadsheetApp.getActiveSpreadsheet();
-  var sheet = ss.getSheetByName(SHEET_NAME)
-             || ss.insertSheet(SHEET_NAME);
-  sheet.getRange('A1').setValue(e.postData.contents);
-  return ContentService
-    .createTextOutput('{"ok":true}')
-    .setMimeType(ContentService.MimeType.JSON);
-}`;
+function doPost(e) { return fail('use GET'); }`;
 
 function renderSettings() {
   const d   = load();
@@ -1038,10 +1056,19 @@ function renderSettings() {
           <input type="url" id="gasUrlInput" class="form-control"
                  placeholder="https://script.google.com/macros/s/…/exec"
                  value="${url}">
-          <button class="btn btn-primary" onclick="saveGasUrl()">저장</button>
+        </div>
+        <div class="form-label" style="margin:10px 0 6px">비밀 키 (SECRET_KEY)</div>
+        <div style="font-size:0.75rem;color:var(--text-muted);margin-bottom:6px">
+          Apps Script 코드의 YOUR_SECRET_KEY와 동일하게 입력하세요
+        </div>
+        <div class="url-row">
+          <input type="password" id="gasSecInput" class="form-control"
+                 placeholder="비밀 키 입력"
+                 value="${getSecretKey()}">
+          <button class="btn btn-primary" onclick="saveGasSettings()">저장</button>
         </div>
         ${isConnected ? `
-        <div class="sync-actions">
+        <div class="sync-actions" style="margin-top:10px">
           <button class="btn btn-ghost" onclick="manualSync()">🔄 지금 동기화</button>
           <button class="btn btn-red" onclick="disconnectGas()">연결 해제</button>
         </div>` : ''}
@@ -1118,20 +1145,28 @@ function renderSettings() {
   document.getElementById('settingsBody').innerHTML = syncHtml + cardHtml + presetHtml + themeHtml + dataHtml;
 }
 
-// ── GAS URL 관리
-function saveGasUrl() {
-  const inp = document.getElementById('gasUrlInput');
-  if (!inp) return;
-  const url = inp.value.trim();
+// ── GAS 설정 저장
+function saveGasSettings() {
+  const url = (document.getElementById('gasUrlInput')?.value || '').trim();
+  const key = (document.getElementById('gasSecInput')?.value || '').trim();
+
   if (url && !url.includes('script.google.com')) {
     alert('올바른 Apps Script URL이 아닌 것 같아요.\nhttps://script.google.com/macros/s/…/exec 형식이어야 합니다.'); return;
   }
+  if (url && !key) {
+    alert('비밀 키를 입력해주세요.\nApps Script 코드의 SECRET_KEY와 동일한 값이어야 합니다.'); return;
+  }
+
   setGasUrl(url);
-  if (url) {
-    alert('✅ URL이 저장됐어요!\n지금 Google Sheets와 동기화합니다.');
+  if (key) localStorage.setItem(GAS_SEC, key);
+  else localStorage.removeItem(GAS_SEC);
+
+  if (url && key) {
+    alert('✅ 저장됐어요!\n지금 Google Sheets와 동기화합니다.');
     renderSettings();
     syncLoad(true);
   } else {
+    setSyncState('idle');
     renderSettings();
   }
 }
@@ -1139,6 +1174,7 @@ function saveGasUrl() {
 function disconnectGas() {
   if (!confirm('Google Sheets 연동을 해제할까요?\n데이터는 이 기기에 남아있습니다.')) return;
   localStorage.removeItem(GAS_KEY);
+  localStorage.removeItem(GAS_SEC);
   setSyncState('idle');
   renderSettings();
 }
@@ -1258,7 +1294,7 @@ function renderPage() {
   applyTheme(d.theme);
   renderPage();
   // GAS 연동 시 앱 시작과 함께 최신 데이터 불러오기
-  if (getGasUrl()) syncLoad(true);
+  if (getGasUrl() && getSecretKey()) syncLoad(true);
   else setSyncState('idle');
 })();
 </script>
