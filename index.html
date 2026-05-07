@@ -519,7 +519,7 @@
   <div class="sheet">
     <div class="sheet-handle"></div>
     <button class="sheet-close" onclick="closeEditModal()">✕</button>
-    <div class="sheet-title">카드 편집</div>
+    <div class="sheet-title" id="editModalTitle">카드 편집</div>
     <input type="hidden" id="eIdx">
     <div class="form-group">
       <label class="form-label">카드 이름</label>
@@ -536,7 +536,10 @@
       <label class="form-label">월 예산 (원)</label>
       <input type="text" id="eBudget" class="form-control" inputmode="numeric" oninput="onAmountInput(this)">
     </div>
-    <button class="btn btn-primary" onclick="saveCard()">저장</button>
+    <div style="display:flex;gap:8px;margin-top:4px">
+      <button id="eDeleteBtn" class="btn btn-red" style="flex:1" onclick="deleteCard()">삭제</button>
+      <button class="btn btn-primary" style="flex:2" onclick="saveCard()">저장</button>
+    </div>
   </div>
 </div>
 
@@ -803,9 +806,6 @@ function renderHome() {
   const d = load();
   let totBudget = 0, totSpent = 0, totIncome = 0;
   d.cards.forEach(c => { totBudget += c.budget; totSpent += totalSpent(c.id, CY, CM); totIncome += totalIncome(c.id, CY, CM); });
-  const totRemain = totBudget - totSpent;
-  const totPct = totBudget ? Math.round(totSpent / totBudget * 100) : 0;
-
   const totNet = totBudget - totSpent + totIncome;
   const totPct = totBudget ? Math.round(totSpent / totBudget * 100) : 0;
 
@@ -1331,7 +1331,8 @@ function renderSettings() {
         </div>
         <div class="setting-row"><span class="setting-lbl">종류</span><span class="setting-val">${c.type==='debit'?'💙 체크카드':'💛 신용카드'}</span></div>
         <div class="setting-row"><span class="setting-lbl">월 예산</span><span class="setting-val">${won(c.budget)}</span></div>
-      </div>`).join('');
+      </div>`).join('') +
+    `<button class="btn btn-primary" style="margin-top:4px" onclick="openEditModal(-1)">+ 카드 추가</button>`;
 
   // ── 프리셋
   const presetHtml = `
@@ -1480,11 +1481,22 @@ function setThemeFont(k)   { const d=load(); d.theme.font=k;    scheduleSave(d);
 
 // ── 카드 편집
 function openEditModal(idx) {
-  const d=load(); const c=d.cards[idx];
-  document.getElementById('eIdx').value    = idx;
-  document.getElementById('eName').value   = c.name;
-  document.getElementById('eBudget').value = c.budget.toLocaleString('ko-KR');
-  setCardType(c.type);
+  const d=load();
+  document.getElementById('eIdx').value = idx;
+  if (idx === -1) {
+    document.getElementById('editModalTitle').textContent = '카드 추가';
+    document.getElementById('eName').value   = '';
+    document.getElementById('eBudget').value = '';
+    document.getElementById('eDeleteBtn').style.display = 'none';
+    setCardType('debit');
+  } else {
+    const c = d.cards[idx];
+    document.getElementById('editModalTitle').textContent = '카드 편집';
+    document.getElementById('eName').value   = c.name;
+    document.getElementById('eBudget').value = c.budget.toLocaleString('ko-KR');
+    document.getElementById('eDeleteBtn').style.display = '';
+    setCardType(c.type);
+  }
   document.getElementById('editModal').classList.add('open');
 }
 function closeEditModal() { document.getElementById('editModal').classList.remove('open'); }
@@ -1494,11 +1506,35 @@ function setCardType(t) {
   document.getElementById('eCredit').classList.toggle('on', t==='credit');
 }
 function saveCard() {
-  const idx=parseInt(document.getElementById('eIdx').value);
-  const name=document.getElementById('eName').value.trim(); const budget=getAmount('eBudget');
-  if (!name||budget<=0) { alert('이름과 예산을 올바르게 입력해주세요.'); return; }
-  const d=load(); d.cards[idx]={...d.cards[idx],name,type:EDIT_CARD_TYPE,budget};
-  scheduleSave(d); closeEditModal(); renderSettings(); alert('✅ 저장됐어요!');
+  const idx    = parseInt(document.getElementById('eIdx').value);
+  const name   = document.getElementById('eName').value.trim();
+  const budget = getAmount('eBudget');
+  if (!name || budget <= 0) { alert('이름과 예산을 올바르게 입력해주세요.'); return; }
+  const d = load();
+  if (idx === -1) {
+    d.cards.push({ id: uid(), name, type: EDIT_CARD_TYPE, budget });
+  } else {
+    d.cards[idx] = { ...d.cards[idx], name, type: EDIT_CARD_TYPE, budget };
+  }
+  scheduleSave(d); closeEditModal(); renderSettings();
+  showToast(idx === -1 ? '✅ 카드가 추가됐어요!' : '✅ 저장됐어요!');
+}
+function deleteCard() {
+  const idx = parseInt(document.getElementById('eIdx').value);
+  if (idx < 0) return;
+  const d = load();
+  const cardName = d.cards[idx].name;
+  if (!confirm(`"${cardName}" 카드를 삭제할까요?\n이 카드의 지출/수입 내역도 모두 삭제됩니다.`)) return;
+  const cardId = d.cards[idx].id;
+  d.cards.splice(idx, 1);
+  // 해당 카드의 모든 내역 삭제
+  Object.keys(d.months).forEach(ym => {
+    if (d.months[ym].expenses) d.months[ym].expenses = d.months[ym].expenses.filter(e => e.cardId !== cardId);
+    if (d.months[ym].incomes)  d.months[ym].incomes  = d.months[ym].incomes.filter(e => e.cardId !== cardId);
+  });
+  d.installments = d.installments.filter(i => i.cardId !== cardId);
+  scheduleSave(d); closeEditModal(); renderSettings();
+  showToast('🗑️ 카드가 삭제됐어요');
 }
 
 // ── 데이터 관리
